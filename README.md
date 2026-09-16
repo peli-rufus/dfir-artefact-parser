@@ -33,7 +33,7 @@ Outputs include CSV, JSON, browser XLSX reports, text summaries, and copied sour
 Optional runtimes:
 
 - Perl and `mactime.pl` for converting the MFT bodyfile into a timeline CSV. Obtain `mactime.pl` separately and pass its actual location.
-- Python and each parser's dependencies for Python-based integrations. IconCacheReader and Defender Python fallbacks invoke `python` from PATH; ChromeSessions searches for `py`, `python`, then `python3`.
+- Python and each parser's dependencies for Python-based integrations. IconCacheReader's Python fallback invokes `python` from PATH; Defender searches for `python`, `py`, then `python3`, and ChromeSessions searches for `py`, `python`, then `python3`.
 
 ## Quick start
 
@@ -115,7 +115,7 @@ For example, `-SkipTools SUM, IconCache, Evtx` skips SumECmd, IconCacheReader, a
 | Browser | Chromium profile reports | Hindsight; profiles without a History database are skipped |
 | Browser | Chrome session/tab recovery | External SNSS Python parser |
 | Cache | CryptnetUrlCache URL extraction | Built-in collector |
-| Defender | MPDetection/MPLog copies; DetectionHistory parser output or raw copies | Optional DetectionHistory parser |
+| Defender | MPDetection/MPLog copies; DetectionHistory JSON reports or raw copies | Optional DHParser |
 | Email | Selected Outlook and Thunderbird files, copied without parsing | Built-in collector |
 | System information | OS summary, hostname, configured IPv4 addresses | Registry extraction and available RECmd output |
 | Event logs | CSV from collected Windows event logs | EvtxECmd |
@@ -153,9 +153,17 @@ RBCmd.exe, WxTCmd.exe, SumECmd.exe, EvtxECmd.exe
 | [sidr](https://github.com/strozfriedberg/sidr) | `sidr.exe` |
 | [IconCacheReader](https://github.com/peli-rufus/IconCacheReader) | `IconCacheReader.exe`, or `IconCacheReader.py` with Python |
 | ChromeSessions | `SNSS-parser-win_v1.py` or `SNSS-parser-win.py` with Python |
-| Defender DetectionHistory | `DefenderHistoryParser.exe` or `defender-detectionhistory-parser.py` with Python |
+| [Defender DetectionHistory (DHParser)](https://github.com/jklepsercyber/defender-detectionhistory-parser) | `dhparser.exe` (preferred) or `dhparser.py` with Python |
 
 Third-party tools and custom Python parsers are not bundled. Matching a filename does not guarantee a compatible command-line interface; check the tool's documentation and inspect the resulting logs and reports.
+
+### Defender DetectionHistory
+
+Place `dhparser.exe` and/or `dhparser.py` in a subfolder such as `<ToolsDir>\DefenderHistoryParser\`. The script searches recursively and prefers the EXE when both are present. If the EXE is absent, it uses the Python source with an available interpreter.
+
+Each DetectionHistory file is passed through `-f <file> -o <temporary-output-directory>`. Per-file invocation avoids DHParser 1.0.1's recursive single-file edge case and also handles collected files with renamed filenames. Valid JSON reports are moved into `11_Defender\DetectionHistory\`, preserving source-relative subdirectories. Console output is captured in `_logs\Defender_DetectionHistory.log`.
+
+Files are copied into `11_Defender\DetectionHistory_raw\` when the parser or Python is unavailable, parsing fails, or no valid JSON report with a GUID is produced. A zero exit code alone is not treated as successful parsing. MPDetection/MPLog collection continues independently. The integration has been checked with controlled parser stubs; this does not establish compatibility with every DetectionHistory format.
 
 ## Output layout
 

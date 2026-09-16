@@ -592,7 +592,7 @@ function Invoke-DefenderDetections {
   #   1. MPDetection-*.log (text) at ProgramData\Microsoft\Windows Defender\Support\
   #   2. DetectionHistory binary files at ...\Scans\History\Service\DetectionHistory\
   # We copy the human-readable MPDetection/MPLog files, and parse the binary
-  # DetectionHistory with DefenderHistoryParser if present in ToolsDir.
+  # DetectionHistory with DHParser if present in ToolsDir.
   param([string]$OutDir)
   $support = Join-Path $ImageRoot "ProgramData\Microsoft\Windows Defender\Support"
   $copied = 0
@@ -609,30 +609,88 @@ function Invoke-DefenderDetections {
     Write-Log "Defender: Support directory not found at $support"
   }
 
-  # Binary DetectionHistory -> CSV via DefenderHistoryParser (if available).
+  # DHParser writes JSON files; console text belongs in a separate log.
   $dhDir = Join-Path $ImageRoot "ProgramData\Microsoft\Windows Defender\Scans\History\Service\DetectionHistory"
-  if (Test-Path -LiteralPath $dhDir) {
-    $dhTool = Resolve-Tool "DefenderHistoryParser.exe"
-    if (-not $dhTool) { $dhTool = Resolve-ToolPy "defender-detectionhistory-parser.py" }
-    if ($dhTool) {
-      $dhFiles = Get-ChildItem -LiteralPath $dhDir -File -Recurse -ErrorAction SilentlyContinue
-      Write-Log "Defender: parsing $($dhFiles.Count) DetectionHistory file(s)"
-      $dhCsv = Join-Path $OutDir "Defender_DetectionHistory.csv"
-      foreach ($f in $dhFiles) {
-        try {
-          if ($dhTool -match '\.py$') { & python $dhTool $f.FullName 2>&1 | Out-File -Append $dhCsv -Encoding utf8 }
-          else { & $dhTool $f.FullName 2>&1 | Out-File -Append $dhCsv -Encoding utf8 }
-        } catch {
-          Write-Log "Defender DetectionHistory ERROR on $($f.Name): $($_.Exception.Message)"
-        }
+  if (-not (Test-Path -LiteralPath $dhDir)) { return }
+
+  $dhExe = Resolve-Tool "dhparser.exe"
+  $dhPy = $null
+  $pythonExe = $null
+  if (-not $dhExe) {
+    $dhPy = Resolve-ToolPy "dhparser.py"
+    if ($dhPy) {
+      foreach ($name in @("python", "py", "python3")) {
+        $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) { $pythonExe = $cmd.Source; break }
       }
-    } else {
-      Write-Log "Defender: DetectionHistory present but no parser in ToolsDir (copying raw files)"
-      $rawDir = Get-ArtefactDir $OutDir "DetectionHistory_raw"
-      Get-ChildItem -LiteralPath $dhDir -File -Recurse -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $rawDir $_.Name) -Force -ErrorAction SilentlyContinue }
     }
   }
+  $canParse = $dhExe -or ($dhPy -and $pythonExe)
+  if (-not $canParse) {
+    Write-Log "Defender: DHParser or Python unavailable; copying raw DetectionHistory files"
+  }
+
+  $dhLog = Join-Path $logDir "Defender_DetectionHistory.log"
+  if ($canParse) { Set-Content -LiteralPath $dhLog -Value "" -Encoding utf8 }
+  $dhFiles = @(Get-ChildItem -LiteralPath $dhDir -File -Recurse -ErrorAction SilentlyContinue)
+  $parsed = 0
+  $rawCopied = 0
+  foreach ($f in $dhFiles) {
+    # Preserve the source-relative directory structure to avoid basename collisions.
+    $relative = $f.FullName.Substring($dhDir.TrimEnd('\').Length).TrimStart('\')
+    $succeeded = $false
+    $tmpOut = $null
+    if ($canParse) {
+      try {
+        # Fresh output prevents an old JSON file from masking a failed invocation.
+        $tmpOut = Join-Path $env:TEMP ("dfir_dh_" + [guid]::NewGuid().ToString("N"))
+        New-DirIfMissing $tmpOut
+        # Invoke per file: DHParser 1.0.1 has a directory-input edge case when
+        # recursive discovery finds exactly one file. Explicit -f avoids it.
+        $a = @("-f", $f.FullName, "-o", $tmpOut)
+        "Input: $($f.FullName)" | Out-File -LiteralPath $dhLog -Append -Encoding utf8
+        $LASTEXITCODE = 0
+        if ($dhExe) {
+          & $dhExe @a 2>&1 | Out-File -LiteralPath $dhLog -Append -Encoding utf8
+        } else {
+          & $pythonExe $dhPy @a 2>&1 | Out-File -LiteralPath $dhLog -Append -Encoding utf8
+        }
+        $exitCode = $LASTEXITCODE
+        $jsonPath = Join-Path $tmpOut ($f.Name + ".json")
+        if ($exitCode -ne 0) {
+          Write-Log "Defender: DHParser exit code $exitCode for $($f.FullName); retaining raw file"
+        } elseif (-not (Test-Path -LiteralPath $jsonPath)) {
+          # DHParser can report a caught parsing error yet exit with code zero.
+          Write-Log "Defender: no JSON produced for $($f.FullName); see $dhLog; retaining raw file"
+        } else {
+          $json = Get-Content -LiteralPath $jsonPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+          if ($null -eq $json -or -not $json.GUID) { throw "JSON is missing the DetectionHistory GUID" }
+          $dest = Join-Path (Get-ArtefactDir $OutDir "DetectionHistory") ($relative + ".json")
+          New-DirIfMissing (Split-Path -Path $dest -Parent)
+          Move-Item -LiteralPath $jsonPath -Destination $dest -Force -ErrorAction Stop
+          $parsed++
+          $succeeded = $true
+        }
+      } catch {
+        Write-Log "Defender: DetectionHistory ERROR on $($f.FullName): $($_.Exception.Message); retaining raw file"
+      } finally {
+        if ($tmpOut -and (Test-Path -LiteralPath $tmpOut)) {
+          Remove-Item -LiteralPath $tmpOut -Recurse -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
+    if (-not $succeeded) {
+      try {
+        $dest = Join-Path (Get-ArtefactDir $OutDir "DetectionHistory_raw") $relative
+        New-DirIfMissing (Split-Path -Path $dest -Parent)
+        Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
+        $rawCopied++
+      } catch {
+        Write-Log "Defender: raw DetectionHistory copy FAILED for $($f.FullName): $($_.Exception.Message)"
+      }
+    }
+  }
+  Write-Log "Defender: DetectionHistory files found=$($dhFiles.Count), JSON reports=$parsed, raw files copied=$rawCopied"
 }
 
 function Copy-FileShared([string]$Src, [string]$Dst) {
