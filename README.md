@@ -13,6 +13,7 @@ Outputs include CSV, JSON, browser XLSX reports, text summaries, and copied sour
 - [Quick start](#quick-start)
 - [Usage](#usage)
 - [Forensic coverage](#forensic-coverage)
+- [Bundled RECmd batch](#bundled-recmd-batch)
 - [Tools directory](#tools-directory)
 - [Output layout](#output-layout)
 - [Evidence handling and limitations](#evidence-handling-and-limitations)
@@ -27,7 +28,7 @@ Outputs include CSV, JSON, browser XLSX reports, text summaries, and copied sour
 - An existing `-ToolsDir` containing the parsers you want to run. External tools are optional; missing tools or source artefacts generally cause the corresponding processing step to be skipped.
 - An elevated PowerShell session for registry-loading features, including BAM/DAM, persistence, firewall rules, Office MRU, and hostname/IP resolution. The built-in SAM reader does not use registry mounting.
 - A writable output directory outside the evidence tree, with space for reports, ESE working copies, and collected email stores.
-- A valid `.reb` file if you want RECmd batch processing. No batch file is bundled with this repository; supply a batch appropriate to your investigation from your RECmd installation or your own collection.
+- RECmd and a valid `.reb` file for registry batch processing. This repository includes [WindowsForensics_Matrix.reb](WindowsForensics_Matrix.reb); pass its path through `-RebFile`, or supply your own batch.
 
 Optional runtimes:
 
@@ -36,7 +37,7 @@ Optional runtimes:
 
 ## Quick start
 
-Download [Invoke-DFIRParse-AllArtefacts.ps1](Invoke-DFIRParse-AllArtefacts.ps1), prepare your tools directory, and open an elevated PowerShell session in the script's directory.
+Download [Invoke-DFIRParse-AllArtefacts.ps1](Invoke-DFIRParse-AllArtefacts.ps1) and [WindowsForensics_Matrix.reb](WindowsForensics_Matrix.reb) into the same directory, prepare your tools directory, and open an elevated PowerShell session in the script's directory.
 
 Run these commands directly in PowerShell. If script execution is blocked, use an execution-policy setting permitted by your environment.
 
@@ -48,23 +49,24 @@ Run these commands directly in PowerShell. If script execution is blocked, use a
     -ToolsDir 'C:\Tools\DFIR'
 ```
 
-To include RECmd batch processing, point to an existing batch file:
+To include RECmd batch processing with the bundled matrix:
 
 ```powershell
 .\Invoke-DFIRParse-AllArtefacts.ps1 `
     -ImageRoot 'E:\' `
     -OutputDir 'C:\Cases\CASE001\Run02' `
     -ToolsDir 'C:\Tools\DFIR' `
-    -RebFile 'C:\Tools\DFIR\RECmd\BatchExamples\YourBatch.reb'
+    -RebFile '.\WindowsForensics_Matrix.reb'
 ```
 
-Replace the example batch path with your actual file. To add an MFT timeline and skip selected steps:
+The batch is not selected automatically: omit `-RebFile` to skip RECmd batch processing, or pass another batch to customise coverage. To include the matrix, add an MFT timeline, and skip selected steps:
 
 ```powershell
 .\Invoke-DFIRParse-AllArtefacts.ps1 `
     -ImageRoot 'C:\Cases\HOST1\C' `
     -OutputDir 'C:\Cases\CASE001\Run03' `
     -ToolsDir 'C:\Tools\DFIR' `
+    -RebFile '.\WindowsForensics_Matrix.reb' `
     -MactimePath 'C:\Tools\SleuthKit\mactime.pl' `
     -SkipTools Hindsight, sidr, Email
 ```
@@ -76,7 +78,7 @@ Replace the example batch path with your actual file. To add an MFT timeline and
 | `-ImageRoot` | Yes | Root of the mounted or collected Windows filesystem. |
 | `-OutputDir` | Yes | Output base directory; the script appends a hostname subfolder. Use a fresh directory for each run. |
 | `-ToolsDir` | Yes | Existing tools directory, searched recursively for supported executables and scripts. |
-| `-RebFile` | No | Existing RECmd batch file. Without it, RECmd batch processing is skipped. |
+| `-RebFile` | No | Path to the bundled `WindowsForensics_Matrix.reb` or another RECmd batch. Without it, RECmd batch processing is skipped. |
 | `-DateTimeFormat` | No | Format string passed through `--dt` to selected external tool invocations. It does not standardise all output timestamps or convert time zones. |
 | `-MactimePath` | No | Path to `mactime.pl`; requires Perl for MFT timeline conversion. |
 | `-SkipTools` | No | Array of step identifiers to skip; see below. |
@@ -120,12 +122,22 @@ For example, `-SkipTools SUM, IconCache, Evtx` skips SumECmd, IconCacheReader, a
 
 Scheduled-task coverage is registry TaskCache coverage through the selected RECmd batch, not a dedicated task-file parser. A category folder does not establish that all artefacts in that category were collected or successfully parsed. Artefact categories are organisational labels, not standalone conclusions about execution or user activity.
 
+## Bundled RECmd batch
+
+[WindowsForensics_Matrix.reb](WindowsForensics_Matrix.reb) is the supplied **Windows Forensics Artefact Matrix**, version 1.0, authored by Peli Rufus. It contains 63 registry-key definitions targeting SOFTWARE, SYSTEM, NTUSER, USRCLASS, and SAM hives.
+
+Its categories cover system information, execution-related artefacts, file/folder activity, USB devices, network configuration, persistence, accounts/credentials, cloud-storage references, and BITS service configuration. The batch defines registry queries; it does not replace dedicated parsers for file-based artefacts or perform credential decryption.
+
+Registry paths and available results vary by Windows version and collected hive contents. The batch's comments are investigative notes, not automatic findings; corroborate interpretations with other evidence. Its SYSTEM queries use `CurrentControlSet` paths, so verify the resulting coverage with your RECmd version and offline hives.
+
+The supplied file is included unchanged. Its entries were checked for the presence of Description, HiveType, Category, KeyPath, and Recursive fields; it has not been run through RECmd against a forensic collection as part of this publication.
+
 ## Tools directory
 
 1. Obtain [Eric Zimmerman's tools](https://ericzimmerman.github.io/), including the tools relevant to your collection. Keep their required runtime files and supporting resources with them.
 2. Place tools beneath one directory. Both flat and per-tool-subfolder layouts are supported; the script searches recursively and selects the first matching executable when no root-level match exists.
 3. Add optional integrations below and their dependencies.
-4. Provide your chosen RECmd batch through `-RebFile`.
+4. Pass the bundled `WindowsForensics_Matrix.reb` (stored beside the PowerShell script) through `-RebFile`, or use your own batch. It does not need to reside inside `-ToolsDir`.
 
 The wrapper recognises these EZ executables:
 
